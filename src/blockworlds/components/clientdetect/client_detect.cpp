@@ -62,4 +62,3 @@ void CClientDetectComponent::ConStatusClient(IConsole::IResult *pResult, void *p
 	}
 }
 
-// ofc also then with potential auto ban / auto deep / maybe if we find some crash function auto-crash (would be fun to see krx kids write in discord that they are crashing on join haha)
