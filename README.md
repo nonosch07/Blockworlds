@@ -50,4 +50,4 @@ A huge thanks to everyone who has contributed to this project:
 
 ## License
 
-This project is distributed under the terms specified in the repository's [LICENSE](LICENSE-BW) file.
+This project is distributed under the terms specified in the repository's [LICENSE](LICENSE-BW.txt) file.
