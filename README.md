@@ -40,6 +40,7 @@ A huge thanks to everyone who has contributed to this project:
 | noby |
 | potato |
 | qxdFox |
+| DrToast |
 
 ## Scope & Support
 
