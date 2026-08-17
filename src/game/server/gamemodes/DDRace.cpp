@@ -131,12 +131,20 @@ void CGameControllerDDRace::OnPlayerConnect(CPlayer *pPlayer)
 
 	if(!Server()->ClientPrevIngame(ClientId))
 	{
-		char aBuf[512];
-		str_format(aBuf, sizeof(aBuf), "'%s' entered and joined the %s", Server()->ClientName(ClientId), GetTeamName(pPlayer->GetTeam()));
-		GameServer()->SendChat(-1, TEAM_ALL, aBuf, -1, CGameContext::FLAG_SIX);
+		// The broadcast is sent by CGameContext once the entry checks (VPN detection)
+		// cleared the client, so that banned clients are never announced.
+		pPlayer->m_JoinMsgPending = true;
 
 		GameServer()->SendChatTarget(ClientId, "Blockworlds src2 by Nouaa. Version: " BLOCKWORLDS_VERSION);
 	}
+}
+
+void CGameControllerDDRace::SendJoinMessage(CPlayer *pPlayer, int VersionFlags)
+{
+	const int ClientId = pPlayer->GetCid();
+	char aBuf[512];
+	str_format(aBuf, sizeof(aBuf), "'%s' entered and joined the %s", Server()->ClientName(ClientId), GetTeamName(pPlayer->GetTeam()));
+	GameServer()->SendChat(-1, TEAM_ALL, aBuf, -1, VersionFlags);
 }
 
 void CGameControllerDDRace::OnPlayerDisconnect(CPlayer *pPlayer, const char *pReason)

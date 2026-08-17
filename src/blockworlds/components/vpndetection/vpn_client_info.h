@@ -16,8 +16,11 @@ struct CVpnClientInfo
 	int m_ClientId;
 	std::string m_IpAddress;
 	std::vector<std::shared_ptr<IVpnServiceResult>> m_Results;
-	bool m_CheckInProgress;
-	int64_t m_LastCheckTime;
+	// Number of queued/running service requests started when the client joined
+	int m_PendingChecks;
+	// Time (time_get) at which the withheld join message is broadcast anyway, 0 when
+	// the join message of this client is not being withheld
+	int64_t m_JoinMsgHoldExpire;
 
 	CVpnClientInfo();
 

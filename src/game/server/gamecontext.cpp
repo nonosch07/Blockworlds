@@ -1081,6 +1081,37 @@ void CGameContext::SendBroadcast(const char *pText, int ClientId, bool IsImporta
 	m_apPlayers[ClientId]->m_LastBroadcastImportance = IsImportant;
 }
 
+void CGameContext::HoldJoinMessage(int ClientId)
+{
+	if(ClientId < 0 || ClientId >= MAX_CLIENTS || !m_apPlayers[ClientId])
+		return;
+
+	m_apPlayers[ClientId]->m_EntryChecksPending = true;
+}
+
+void CGameContext::ReleaseJoinMessage(int ClientId)
+{
+	if(ClientId < 0 || ClientId >= MAX_CLIENTS || !m_apPlayers[ClientId])
+		return;
+
+	m_apPlayers[ClientId]->m_EntryChecksPending = false;
+	SendPendingJoinMessage(ClientId);
+}
+
+void CGameContext::SendPendingJoinMessage(int ClientId)
+{
+	if(ClientId < 0 || ClientId >= MAX_CLIENTS || !m_apPlayers[ClientId])
+		return;
+
+	CPlayer *pPlayer = m_apPlayers[ClientId];
+	if(!pPlayer->m_JoinMsgPending || pPlayer->m_EntryChecksPending)
+		return;
+
+	pPlayer->m_JoinMsgPending = false;
+	// 0.7 clients only get the message from us if they did not print it themselves
+	m_pController->SendJoinMessage(pPlayer, FLAG_SIX | (pPlayer->m_JoinMsgSilentForSixup ? FLAG_SIXUP : 0));
+}
+
 void CGameContext::StartVote(const char *pDesc, const char *pCommand, const char *pReason, const char *pSixupDesc)
 {
 	// reset votes
@@ -2060,7 +2091,9 @@ void CGameContext::OnClientEnter(int ClientId)
 	NewClientInfoMsg.m_pName = Server()->ClientName(ClientId);
 	NewClientInfoMsg.m_pClan = Server()->ClientClan(ClientId);
 	NewClientInfoMsg.m_Country = Server()->ClientCountry(ClientId);
-	NewClientInfoMsg.m_Silent = false;
+	// 0.7 clients announce the join themselves, keep them quiet while it is withheld
+	pNewPlayer->m_JoinMsgSilentForSixup = pNewPlayer->m_EntryChecksPending;
+	NewClientInfoMsg.m_Silent = pNewPlayer->m_JoinMsgSilentForSixup;
 
 	for(int p = 0; p < protocol7::NUM_SKINPARTS; p++)
 	{
@@ -2123,6 +2156,10 @@ void CGameContext::OnClientEnter(int ClientId)
 
 	for(const auto &Component : g_ComponentRegistry.Active())
 		Component->OnPlayerEnter(ClientId);
+
+	// Announce the join now unless a component (VPN detection) is still checking the
+	// client, in which case it releases the message once the client is cleared.
+	SendPendingJoinMessage(ClientId);
 
 	LogEvent("Connect", ClientId);
 
@@ -2207,6 +2244,9 @@ void CGameContext::OnClientDrop(int ClientId, const char *pReason)
 	}
 
 	AbortVoteKickOnDisconnect(ClientId);
+	// A client that was never announced (entry checks such as VPN detection are still
+	// running) leaves without any notification either
+	const bool SilentDrop = m_apPlayers[ClientId] && m_apPlayers[ClientId]->m_EntryChecksPending;
 	m_pController->OnPlayerDisconnect(m_apPlayers[ClientId], pReason);
 	delete m_apPlayers[ClientId];
 	m_apPlayers[ClientId] = 0;
@@ -2241,7 +2281,7 @@ void CGameContext::OnClientDrop(int ClientId, const char *pReason)
 	protocol7::CNetMsg_Sv_ClientDrop Msg;
 	Msg.m_ClientId = ClientId;
 	Msg.m_pReason = pReason;
-	Msg.m_Silent = false;
+	Msg.m_Silent = SilentDrop;
 	Server()->SendPackMsg(&Msg, MSGFLAG_VITAL | MSGFLAG_NORECORD, -1);
 
 	for(const auto &Component : g_ComponentRegistry.Active())

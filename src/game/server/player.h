@@ -127,6 +127,17 @@ public:
 	int m_PreviousDieTick;
 	std::optional<int> m_Score;
 	int m_JoinTick;
+
+	// The join broadcast is owed to chat but not sent yet.
+	bool m_JoinMsgPending = false;
+	// 0.7 clients print the join themselves from Sv_ClientInfo, which was sent
+	// silently because the join was withheld, so they need the chat message too.
+	bool m_JoinMsgSilentForSixup = false;
+	// Entry checks (VPN detection) have not cleared this client yet. While this is
+	// set both the join and the leave broadcast are withheld, so a client that ends
+	// up being banned never shows up in chat at all.
+	bool m_EntryChecksPending = false;
+
 	bool m_ForceBalanced;
 	int m_LastActionTick;
 	int m_TeamChangeTick;

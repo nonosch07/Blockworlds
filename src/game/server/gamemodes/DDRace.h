@@ -17,6 +17,7 @@ public:
 
 	void OnPlayerConnect(class CPlayer *pPlayer) override;
 	void OnPlayerDisconnect(class CPlayer *pPlayer, const char *pReason) override;
+	void SendJoinMessage(class CPlayer *pPlayer, int VersionFlags) override;
 
 	void OnReset() override;
 

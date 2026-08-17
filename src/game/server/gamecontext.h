@@ -327,6 +327,12 @@ public:
 	void SendSettings(int ClientId) const;
 	void SendBroadcast(const char *pText, int ClientId, bool IsImportant = true);
 
+	// Join/leave broadcasts of a joining client are withheld until the entry checks
+	// (VPN detection) confirmed that the client is allowed to stay.
+	void HoldJoinMessage(int ClientId);
+	void ReleaseJoinMessage(int ClientId);
+	void SendPendingJoinMessage(int ClientId);
+
 	void List(int ClientId, const char *pFilter);
 
 	//

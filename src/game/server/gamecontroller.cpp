@@ -432,16 +432,20 @@ void IGameController::OnPlayerDisconnect(class CPlayer *pPlayer, const char *pRe
 		   (pReason && str_comp(pReason, "changed server") == 0)) &&
 		!pPlayer->m_IsNpc)
 	{
-		char aBuf[512];
-		if(pReason && str_comp(pReason, "changed server") == 0)
-			str_format(aBuf, sizeof(aBuf), "\xE2\x9C\x88 '%s' has joined another server!", Server()->ClientName(ClientId));
-		else if(pReason && *pReason)
-			str_format(aBuf, sizeof(aBuf), "'%s' has left the game (%s)", Server()->ClientName(ClientId), pReason);
-		else
-			str_format(aBuf, sizeof(aBuf), "'%s' has left the game", Server()->ClientName(ClientId));
-		GameServer()->SendChat(-1, TEAM_ALL, aBuf, -1, CGameContext::FLAG_SIX);
+		// Clients that are still waiting on their entry checks (VPN detection) were
+		// never announced in chat, so they leave silently as well.
+		if(!pPlayer->m_EntryChecksPending)
+		{
+			char aBuf[512];
+			if(pReason && str_comp(pReason, "changed server") == 0)
+				str_format(aBuf, sizeof(aBuf), "\xE2\x9C\x88 '%s' has joined another server!", Server()->ClientName(ClientId));
+			else if(pReason && *pReason)
+				str_format(aBuf, sizeof(aBuf), "'%s' has left the game (%s)", Server()->ClientName(ClientId), pReason);
+			else
+				str_format(aBuf, sizeof(aBuf), "'%s' has left the game", Server()->ClientName(ClientId));
+			GameServer()->SendChat(-1, TEAM_ALL, aBuf, -1, CGameContext::FLAG_SIX);
+		}
 
-		str_format(aBuf, sizeof(aBuf), "leave player='%d:%s'", ClientId, Server()->ClientName(ClientId));
 		char aAddrStr[NETADDR_MAXSTRSIZE];
 		Server()->GetClientAddr(ClientId, aAddrStr, sizeof(aAddrStr));
 		char aLeaveBuf[512];

@@ -43,7 +43,9 @@ public:
 	bool IsDebug() const override;
 
 	void OnShutdown() override;
+	void OnDisable() override;
 	void OnTick() override;
+	void OnPlayerEntering(int ClientId) override;
 	void OnPlayerEnter(int ClientId) override;
 	void OnPlayerDrop(int ClientId) override;
 
@@ -134,6 +136,30 @@ private:
 	void AsyncExecuteRequest(std::shared_ptr<IVpnServiceRequest> pRequest);
 	void CleanupFinishedThreads();
 	void BanClient(int ClientId, const char *pReason);
+
+	/**
+	 * Whether a client that just connected has to wait for its VPN check before being
+	 * announced, i.e. whether a check could still get it banned. False when the cache
+	 * already answers for every service that would be asked.
+	 */
+	bool WillHoldJoinMessage(int ClientId) const;
+
+	/**
+	 * Withholds the join message of a connecting client until the checks are done,
+	 * so that a client banned for VPN use is never announced in chat
+	 */
+	void HoldJoinMessage(int ClientId);
+
+	/**
+	 * Broadcasts the withheld join message, the client is allowed to stay.
+	 * Does nothing for clients that were already dropped or never withheld.
+	 */
+	void ReleaseJoinMessage(int ClientId);
+
+	/**
+	 * Releases join messages of clients whose checks never came back
+	 */
+	void ProcessJoinMessageHolds();
 
 	int m_BanTimeMinutes;
 	std::atomic<int> m_ActiveRequestThreads;

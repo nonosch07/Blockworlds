@@ -118,6 +118,10 @@ public:
 	virtual void OnPlayerConnect(class CPlayer *pPlayer);
 	virtual void OnPlayerDisconnect(class CPlayer *pPlayer, const char *pReason);
 
+	// Broadcasts that a client joined. Called by CGameContext once the entry checks
+	// (VPN detection) cleared the client, which can be a few seconds after connecting.
+	virtual void SendJoinMessage(class CPlayer *pPlayer, int VersionFlags) {}
+
 	virtual void OnReset();
 
 	// game

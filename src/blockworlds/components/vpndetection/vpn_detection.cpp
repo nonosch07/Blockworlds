@@ -22,6 +22,9 @@
 namespace {
 constexpr int MAX_CONCURRENT_VPN_REQUESTS = 8;
 constexpr int MAX_PENDING_VPN_REQUESTS_PER_SERVICE = MAX_CLIENTS;
+// A withheld join message is broadcast as soon as the services answered. This is only
+// the escape hatch for a request that never comes back at all.
+constexpr int JOIN_MSG_MAX_HOLD_SECONDS = 10;
 
 bool IsServiceListSeparator(char c)
 {
@@ -326,6 +329,17 @@ void CVpnDetectionComponent::OnTick()
 
 	CleanupFinishedThreads();
 	ProcessRequestQueues();
+	ProcessJoinMessageHolds();
+}
+
+void CVpnDetectionComponent::OnDisable()
+{
+	// Nobody is left to finish the checks, so stop withholding any join message
+	for(int i = 0; i < MAX_CLIENTS; i++)
+	{
+		if(m_aClientInfo[i].m_JoinMsgHoldExpire)
+			ReleaseJoinMessage(i);
+	}
 }
 
 void CVpnDetectionComponent::OnShutdown()
@@ -382,31 +396,44 @@ bool CVpnDetectionComponent::IsLocalOrBogonIp(const char *pIp) const
 	return false;
 }
 
+void CVpnDetectionComponent::OnPlayerEntering(int ClientId)
+{
+	if(ClientId < 0 || ClientId >= MAX_CLIENTS)
+		return;
+
+	CVpnClientInfo *pInfo = &m_aClientInfo[ClientId];
+	pInfo->m_Results.clear();
+	pInfo->m_PendingChecks = 0;
+	pInfo->m_JoinMsgHoldExpire = 0;
+
+	char aAddrStr[NETADDR_MAXSTRSIZE];
+	Server()->GetClientAddr(ClientId, aAddrStr, sizeof(aAddrStr));
+	pInfo->m_IpAddress = aAddrStr;
+
+	LoadCachedResultsForClient(ClientId);
+
+	// Runs before the join is announced and before the 0.7 client info is built, so
+	// that a client a check can still ban is kept out of the chat from the start
+	if(WillHoldJoinMessage(ClientId))
+		HoldJoinMessage(ClientId);
+}
+
 void CVpnDetectionComponent::OnPlayerEnter(int ClientId)
 {
 	if(ClientId < 0 || ClientId >= MAX_CLIENTS)
 		return;
 
-	m_aClientInfo[ClientId].m_Results.clear();
-	m_aClientInfo[ClientId].m_CheckInProgress = false;
-	m_aClientInfo[ClientId].m_LastCheckTime = 0;
-
-	NETADDR Addr;
-	Server()->GetClientAddr(ClientId, &Addr);
-	char aAddrStr[NETADDR_MAXSTRSIZE];
-	net_addr_str(&Addr, aAddrStr, sizeof(aAddrStr), false);
-	m_aClientInfo[ClientId].m_IpAddress = aAddrStr;
+	CVpnClientInfo *pInfo = &m_aClientInfo[ClientId];
+	const char *pIpAddress = pInfo->m_IpAddress.c_str();
 
 	LogDebug("Client connected | ID: %d | Name: %s | IP: %s",
-		ClientId, Server()->ClientName(ClientId), aAddrStr);
+		ClientId, Server()->ClientName(ClientId), pIpAddress);
 
-	LoadCachedResultsForClient(ClientId);
-
-	if(IsLocalOrBogonIp(aAddrStr) || IsIpWhitelisted(aAddrStr))
+	if(IsLocalOrBogonIp(pIpAddress) || IsIpWhitelisted(pIpAddress))
 	{
 		auto pLocalResult = std::make_shared<CVpnServiceResult>();
 		pLocalResult->m_ServiceName = "local";
-		pLocalResult->m_IpAddress = aAddrStr;
+		pLocalResult->m_IpAddress = pInfo->m_IpAddress;
 		pLocalResult->m_Asn = "Local Network";
 		pLocalResult->m_Isp = "Private IP Address";
 		pLocalResult->m_IsBadIP = false;
@@ -414,18 +441,27 @@ void CVpnDetectionComponent::OnPlayerEnter(int ClientId)
 		pLocalResult->m_IsValid = true;
 		pLocalResult->m_Timestamp = time_timestamp();
 
-		LogDebug("Local IP detected | Client: %d | IP: %s | Skipping VPN check", ClientId, aAddrStr);
+		LogDebug("Local IP detected | Client: %d | IP: %s | Skipping VPN check", ClientId, pIpAddress);
 		ProcessResult(ClientId, pLocalResult);
 		return;
 	}
 
+	// A bad cached result bans (and drops) the client right away, unless banning is
+	// disabled, in which case the client stays and gets announced
 	if(HandleFreshCachedBadResult(ClientId))
+	{
+		ReleaseJoinMessage(ClientId);
 		return;
+	}
 
 	if(Config()->m_SvVpnEnabled)
 	{
 		CheckClient(ClientId, true);
 	}
+
+	// Nothing to wait for: no service was queued, everything was already cached
+	if(pInfo->m_PendingChecks <= 0)
+		ReleaseJoinMessage(ClientId);
 }
 
 void CVpnDetectionComponent::OnPlayerDrop(int ClientId)
@@ -438,8 +474,9 @@ void CVpnDetectionComponent::OnPlayerDrop(int ClientId)
 		LogDebug("Removed queued VPN checks for dropped client | Client: %d | Count: %d", ClientId, RemovedRequests);
 
 	m_aClientInfo[ClientId].m_Results.clear();
-	m_aClientInfo[ClientId].m_CheckInProgress = false;
 	m_aClientInfo[ClientId].m_IpAddress.clear();
+	m_aClientInfo[ClientId].m_PendingChecks = 0;
+	m_aClientInfo[ClientId].m_JoinMsgHoldExpire = 0;
 }
 
 void CVpnDetectionComponent::CheckClient(int ClientId, bool FullCheck)
@@ -453,6 +490,10 @@ void CVpnDetectionComponent::CheckClient(int ClientId, bool FullCheck)
 
 		for(const auto &ServiceName : ServiceNames)
 		{
+			// a cached bad result can ban and drop the client mid-loop
+			if(!GameServer()->m_apPlayers[ClientId])
+				break;
+
 			CheckClientService(ClientId, ServiceName.c_str());
 		}
 	}
@@ -534,7 +575,7 @@ void CVpnDetectionComponent::CheckClientService(int ClientId, const char *pServi
 
 	if(EnqueueRequest(pRequest))
 	{
-		pInfo->m_CheckInProgress = true;
+		pInfo->m_PendingChecks++;
 		LogDebug("VPN check queued | Client: %d | Service: %s | IP: %s",
 			ClientId, pServiceName, pInfo->m_IpAddress.c_str());
 	}
@@ -691,7 +732,8 @@ void CVpnDetectionComponent::ProcessResult(int ClientId, std::shared_ptr<IVpnSer
 		*Existing = pResult;
 	else
 		pInfo->m_Results.push_back(pResult);
-	pInfo->m_CheckInProgress = false;
+	if(pInfo->m_PendingChecks > 0)
+		pInfo->m_PendingChecks--;
 
 	if(pResult->IsValid())
 	{
@@ -724,6 +766,11 @@ void CVpnDetectionComponent::ProcessResult(int ClientId, std::shared_ptr<IVpnSer
 			ClientId, pResult->GetServiceName(),
 			pResult->GetErrorMessage()[0] ? pResult->GetErrorMessage() : "Unknown error");
 	}
+
+	// All checks came back and the client is still here, so it may be announced.
+	// A banned client was already dropped above, which leaves nothing to release.
+	if(pInfo->m_PendingChecks <= 0)
+		ReleaseJoinMessage(ClientId);
 }
 
 void CVpnDetectionComponent::PrintManualResult(std::shared_ptr<IVpnServiceResult> pResult, bool Cached)
@@ -1089,6 +1136,80 @@ bool CVpnDetectionComponent::IsResultForCurrentClient(int ClientId, const IVpnSe
 		return false;
 
 	return str_comp(pInfo->m_IpAddress.c_str(), pResult->GetIpAddress()) == 0;
+}
+
+bool CVpnDetectionComponent::WillHoldJoinMessage(int ClientId) const
+{
+	if(ClientId < 0 || ClientId >= MAX_CLIENTS)
+		return false;
+
+	// Only a ban can still remove the client, so only then are the messages withheld
+	if(!Config()->m_SvVpnEnabled || !Config()->m_SvVpnBanEnabled)
+		return false;
+
+	const CVpnClientInfo *pInfo = &m_aClientInfo[ClientId];
+	if(IsLocalOrBogonIp(pInfo->m_IpAddress.c_str()) || IsIpWhitelisted(pInfo->m_IpAddress.c_str()))
+		return false;
+
+	// A cached bad verdict bans this client without asking anyone, keep it quiet
+	if(pInfo->IsBadIP())
+		return true;
+
+	// Every service that would be asked answered recently enough for the cache, so no
+	// request is sent and a clean client is announced without any delay
+	for(const auto &ServiceName : GetActiveServiceNames())
+	{
+		if(!pInfo->GetResultByService(ServiceName.c_str()))
+			return true;
+	}
+
+	return false;
+}
+
+void CVpnDetectionComponent::HoldJoinMessage(int ClientId)
+{
+	if(ClientId < 0 || ClientId >= MAX_CLIENTS)
+		return;
+
+	if(!GameServer()->m_apPlayers[ClientId])
+		return;
+
+	m_aClientInfo[ClientId].m_JoinMsgHoldExpire = time_get() + (int64_t)JOIN_MSG_MAX_HOLD_SECONDS * time_freq();
+	GameServer()->HoldJoinMessage(ClientId);
+}
+
+void CVpnDetectionComponent::ReleaseJoinMessage(int ClientId)
+{
+	if(ClientId < 0 || ClientId >= MAX_CLIENTS)
+		return;
+
+	m_aClientInfo[ClientId].m_JoinMsgHoldExpire = 0;
+	GameServer()->ReleaseJoinMessage(ClientId);
+}
+
+void CVpnDetectionComponent::ProcessJoinMessageHolds()
+{
+	const int64_t Now = time_get();
+	for(int i = 0; i < MAX_CLIENTS; i++)
+	{
+		if(!m_aClientInfo[i].m_JoinMsgHoldExpire)
+			continue;
+
+		if(!GameServer()->m_apPlayers[i])
+		{
+			m_aClientInfo[i].m_JoinMsgHoldExpire = 0;
+			continue;
+		}
+
+		if(Now < m_aClientInfo[i].m_JoinMsgHoldExpire)
+			continue;
+
+		// Announce the client anyway instead of hiding a join forever because a
+		// service never answered
+		Log("VPN check did not answer in %d seconds, announcing join | Client: %d | Pending checks: %d",
+			JOIN_MSG_MAX_HOLD_SECONDS, i, m_aClientInfo[i].m_PendingChecks);
+		ReleaseJoinMessage(i);
+	}
 }
 
 void CVpnDetectionComponent::BanClient(int ClientId, const char *pReason)

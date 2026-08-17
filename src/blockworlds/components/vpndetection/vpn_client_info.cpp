@@ -4,8 +4,8 @@
 
 CVpnClientInfo::CVpnClientInfo() :
 	m_ClientId(-1),
-	m_CheckInProgress(false),
-	m_LastCheckTime(0)
+	m_PendingChecks(0),
+	m_JoinMsgHoldExpire(0)
 {
 }
 
