@@ -7,6 +7,8 @@
 #include <game/server/player.h>
 #include <game/server/save.h>
 
+#include <blockworlds/components/core/component_registry.h>
+#include <blockworlds/components/events.h>
 #include <blockworlds/votes/votemanager.h>
 
 #include <algorithm>
@@ -48,6 +50,9 @@ std::shared_ptr<COneOnOneEvent> COneOnOneManager::CreateMatch(int Player1ID, int
 		return nullptr;
 	}
 
+	LeaveEventRegistration(Player1ID);
+	LeaveEventRegistration(Player2ID);
+
 	return match;
 }
 
@@ -80,7 +85,19 @@ std::shared_ptr<COneOnOneEvent> COneOnOneManager::CreateMatchWithConfig(int Play
 		return nullptr;
 	}
 
+	LeaveEventRegistration(Player1ID);
+	LeaveEventRegistration(Player2ID);
+
 	return match;
+}
+
+void COneOnOneManager::LeaveEventRegistration(int ClientId)
+{
+	auto events = g_ComponentRegistry.Get<CEvents>();
+	if(!events || !events->DropRegistration(ClientId))
+		return;
+
+	GameServer()->SendChatTarget(ClientId, "You were taken out of the event queue because your 1on1 is starting.");
 }
 
 std::shared_ptr<COneOnOneEvent> COneOnOneManager::GetMatchForPlayer(int ClientId) const

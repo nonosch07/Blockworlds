@@ -43,6 +43,65 @@ COneOnOneEvent::~COneOnOneEvent()
 	m_SavedWeapons.clear();
 }
 
+std::vector<vec2> COneOnOneEvent::GetArenaSpawnPositions() const
+{
+	auto *pZones = GameServer()->ZoneManager();
+	const bool RandomMode = m_Config.m_SpawnMode == 1;
+
+	std::vector<vec2> Positions = RandomMode ? pZones->Get1on1ArenaPositions(-1) : pZones->GetNamedQuadCenters("1on1_spawn");
+	if(!Positions.empty())
+		return Positions;
+
+	// the configured source does not exist on this map: rather than spawning players
+	// wherever the regular spawn system puts them, use the other arena source
+	return RandomMode ? pZones->GetNamedQuadCenters("1on1_spawn") : pZones->Get1on1ArenaPositions(-1);
+}
+
+void COneOnOneEvent::PickSpawnReservation(int PositionCount)
+{
+	if(PositionCount <= 0)
+	{
+		// leaving stale indices here would point into a differently sized list
+		m_SpawnReservation.pos1Idx = -1;
+		m_SpawnReservation.pos2Idx = -1;
+		return;
+	}
+
+	if(PositionCount == 1)
+	{
+		m_SpawnReservation.pos1Idx = 0;
+		m_SpawnReservation.pos2Idx = 0;
+		return;
+	}
+
+	const int Idx1 = secure_rand_below(PositionCount);
+	int Idx2 = secure_rand_below(PositionCount - 1);
+	if(Idx2 >= Idx1)
+		Idx2++;
+
+	m_SpawnReservation.pos1Idx = Idx1;
+	m_SpawnReservation.pos2Idx = Idx2;
+}
+
+void COneOnOneEvent::SpawnAtReservedSlot(CPlayer *pPlayer, const std::vector<vec2> &Positions, int Idx)
+{
+	if(!pPlayer)
+		return;
+
+	if(Positions.empty())
+	{
+		// no 1on1 quads on this map at all: leave the player to the regular spawn
+		// system instead of dropping them at the map origin
+		dbg_msg("1on1", "no arena spawn position found for player %d", pPlayer->GetCid());
+		return;
+	}
+
+	if(Idx < 0 || Idx >= (int)Positions.size())
+		Idx = 0;
+
+	pPlayer->ForceSpawn(Positions[Idx], false);
+}
+
 bool COneOnOneEvent::Initialize(int Player1ID, int Player2ID, int Wager)
 {
 	m_Player1ID = Player1ID;
@@ -157,27 +216,7 @@ bool COneOnOneEvent::InitializeConfigPhase(int Player1ID, int Player2ID, int Wag
 	ForcePlayerIntoEvent(p2);
 
 	std::vector<vec2> spawnPosition = GameServer()->ZoneManager()->Get1on1PrepPositions();
-	int spawncount = (int)spawnPosition.size();
-
-	if(spawncount <= 0)
-	{
-		m_SpawnReservation.pos1Idx = -1;
-		m_SpawnReservation.pos2Idx = -1;
-	}
-	else if(spawncount == 1)
-	{
-		m_SpawnReservation.pos1Idx = 0;
-		m_SpawnReservation.pos2Idx = 0;
-	}
-	else
-	{
-		int idx1 = secure_rand_below(spawncount);
-		int idx2 = secure_rand_below(spawncount - 1);
-		if(idx2 >= idx1)
-			idx2++;
-		m_SpawnReservation.pos1Idx = idx1;
-		m_SpawnReservation.pos2Idx = idx2;
-	}
+	PickSpawnReservation((int)spawnPosition.size());
 
 	// kill & respawn at prep arena positions (no freeze during warmup)
 	SaveAndClearCosmetics(m_Player1ID);
@@ -188,28 +227,16 @@ bool COneOnOneEvent::InitializeConfigPhase(int Player1ID, int Player2ID, int Wag
 	if(p2 && p2->GetCharacter())
 		p2->KillCharacter(WEAPON_WORLD, false);
 
-	if(p1 && m_SpawnReservation.pos1Idx >= 0 && m_SpawnReservation.pos1Idx < (int)spawnPosition.size())
-	{
-		p1->ForceSpawn(spawnPosition[m_SpawnReservation.pos1Idx], false);
-	}
-	if(p2 && m_SpawnReservation.pos2Idx >= 0 && m_SpawnReservation.pos2Idx < (int)spawnPosition.size())
-	{
-		p2->ForceSpawn(spawnPosition[m_SpawnReservation.pos2Idx], false);
-	}
+	SpawnAtReservedSlot(p1, spawnPosition, m_SpawnReservation.pos1Idx);
+	SpawnAtReservedSlot(p2, spawnPosition, m_SpawnReservation.pos2Idx);
 
 	m_StartTimer = 0;
 
 	// initialize player state for warmup
 	if(p1)
-	{
 		p1->m_Score = 0;
-		p1->m_allowDeath = false;
-	}
 	if(p2)
-	{
 		p2->m_Score = 0;
-		p2->m_allowDeath = false;
-	}
 
 	// enter Preparation state (warmup/config phase)
 	SetState(EEventState::Preparation);
@@ -434,27 +461,8 @@ void COneOnOneEvent::StartMatchFromConfig()
 		pStart2->m_Score = 0;
 
 	// re-pick spawn positions and respawn both players frozen
-	std::vector<vec2> spawnPosition;
-	if(m_Config.m_SpawnMode == 1)
-		spawnPosition = GameServer()->ZoneManager()->Get1on1ArenaPositions(-1);
-	else
-		spawnPosition = GameServer()->ZoneManager()->GetNamedQuadCenters("1on1_spawn");
-	int spawncount = (int)spawnPosition.size();
-
-	if(spawncount >= 2)
-	{
-		int idx1 = secure_rand_below(spawncount);
-		int idx2 = secure_rand_below(spawncount - 1);
-		if(idx2 >= idx1)
-			idx2++;
-		m_SpawnReservation.pos1Idx = idx1;
-		m_SpawnReservation.pos2Idx = idx2;
-	}
-	else if(spawncount == 1)
-	{
-		m_SpawnReservation.pos1Idx = 0;
-		m_SpawnReservation.pos2Idx = 0;
-	}
+	std::vector<vec2> spawnPosition = GetArenaSpawnPositions();
+	PickSpawnReservation((int)spawnPosition.size());
 
 	auto pController = (CGameControllerDDRace *)GameServer()->m_pController;
 	CPlayer *p1 = GameServer()->GetPlayer(m_Player1ID);
@@ -465,9 +473,7 @@ void COneOnOneEvent::StartMatchFromConfig()
 		pController->Teams().SetForceCharacterTeam(m_Player1ID, m_Team);
 		if(p1->GetCharacter())
 			p1->KillCharacter(WEAPON_WORLD, false);
-		int idx1 = m_SpawnReservation.pos1Idx;
-		if(idx1 >= 0 && idx1 < (int)spawnPosition.size())
-			p1->ForceSpawn(spawnPosition[idx1], false);
+		SpawnAtReservedSlot(p1, spawnPosition, m_SpawnReservation.pos1Idx);
 		if(p1->GetCharacter())
 			p1->GetCharacter()->FreezeForce(3);
 	}
@@ -476,9 +482,7 @@ void COneOnOneEvent::StartMatchFromConfig()
 		pController->Teams().SetForceCharacterTeam(m_Player2ID, m_Team);
 		if(p2->GetCharacter())
 			p2->KillCharacter(WEAPON_WORLD, false);
-		int idx2 = m_SpawnReservation.pos2Idx;
-		if(idx2 >= 0 && idx2 < (int)spawnPosition.size())
-			p2->ForceSpawn(spawnPosition[idx2], false);
+		SpawnAtReservedSlot(p2, spawnPosition, m_SpawnReservation.pos2Idx);
 		if(p2->GetCharacter())
 			p2->GetCharacter()->FreezeForce(3);
 	}
@@ -659,32 +663,8 @@ bool COneOnOneEvent::StartEvent()
 	ForcePlayerIntoEvent(p1);
 	ForcePlayerIntoEvent(p2);
 
-	std::vector<vec2> spawnPosition;
-	if(m_Config.m_SpawnMode == 1)
-		spawnPosition = GameServer()->ZoneManager()->Get1on1ArenaPositions(-1);
-	else
-		spawnPosition = GameServer()->ZoneManager()->GetNamedQuadCenters("1on1_spawn");
-	int spawncount = (int)spawnPosition.size();
-
-	if(spawncount <= 0)
-	{
-		m_SpawnReservation.pos1Idx = -1;
-		m_SpawnReservation.pos2Idx = -1;
-	}
-	else if(spawncount == 1)
-	{
-		m_SpawnReservation.pos1Idx = 0;
-		m_SpawnReservation.pos2Idx = 0;
-	}
-	else
-	{
-		int idx1 = secure_rand_below(spawncount);
-		int idx2 = secure_rand_below(spawncount - 1);
-		if(idx2 >= idx1)
-			idx2++;
-		m_SpawnReservation.pos1Idx = idx1;
-		m_SpawnReservation.pos2Idx = idx2;
-	}
+	std::vector<vec2> spawnPosition = GetArenaSpawnPositions();
+	PickSpawnReservation((int)spawnPosition.size());
 
 	if(p1 && p1->GetCharacter())
 		p1->KillCharacter(WEAPON_WORLD, false);
@@ -696,18 +676,13 @@ bool COneOnOneEvent::StartEvent()
 	SaveAndClearCosmetics(m_Player2ID);
 
 	// directly spawn players at their reserved 1on1 positions
-	if(p1 && m_SpawnReservation.pos1Idx >= 0 && m_SpawnReservation.pos1Idx < (int)spawnPosition.size())
-	{
-		p1->ForceSpawn(spawnPosition[m_SpawnReservation.pos1Idx], false);
-		if(p1->GetCharacter())
-			p1->GetCharacter()->FreezeForce(3);
-	}
-	if(p2 && m_SpawnReservation.pos2Idx >= 0 && m_SpawnReservation.pos2Idx < (int)spawnPosition.size())
-	{
-		p2->ForceSpawn(spawnPosition[m_SpawnReservation.pos2Idx], false);
-		if(p2->GetCharacter())
-			p2->GetCharacter()->FreezeForce(3);
-	}
+	SpawnAtReservedSlot(p1, spawnPosition, m_SpawnReservation.pos1Idx);
+	if(p1 && p1->GetCharacter())
+		p1->GetCharacter()->FreezeForce(3);
+
+	SpawnAtReservedSlot(p2, spawnPosition, m_SpawnReservation.pos2Idx);
+	if(p2 && p2->GetCharacter())
+		p2->GetCharacter()->FreezeForce(3);
 
 	m_StartTimer = 0;
 	m_MatchStartTick = Server()->Tick();
@@ -782,8 +757,6 @@ void COneOnOneEvent::OnTick()
 			pController->Teams().SetForceCharacterTeam(Cid, TEAM_FLOCK);
 			LoadPosition(Cid);
 			LoadWeapons(Cid);
-			if(auto p = GameServer()->GetPlayer(Cid))
-				p->m_allowDeath = true;
 		}
 
 		// restore solo & collision state for saved players
@@ -1119,20 +1092,9 @@ void COneOnOneEvent::OnCharacterSpawn(int ClientId, vec2 SpawnPos)
 	if(ClientId != m_Player1ID && ClientId != m_Player2ID)
 		return;
 
-	auto p1 = GameServer()->GetPlayer(m_Player1ID);
-	auto p2 = GameServer()->GetPlayer(m_Player2ID);
-	if(p1)
-		p1->m_allowDeath = false;
-	if(p2)
-		p2->m_allowDeath = false;
-
 	if(GetState() == EEventState::Active)
 	{
-		std::vector<vec2> spawnPos;
-		if(m_Config.m_SpawnMode == 1)
-			spawnPos = GameServer()->ZoneManager()->Get1on1ArenaPositions(-1);
-		else
-			spawnPos = GameServer()->ZoneManager()->GetNamedQuadCenters("1on1_spawn");
+		std::vector<vec2> spawnPos = GetArenaSpawnPositions();
 
 		int reservedIdx = (ClientId == m_Player1ID) ? m_SpawnReservation.pos1Idx : m_SpawnReservation.pos2Idx;
 
@@ -1142,9 +1104,10 @@ void COneOnOneEvent::OnCharacterSpawn(int ClientId, vec2 SpawnPos)
 			pSpawned->ResetVelocity();
 			pSpawned->FreezeForce(3);
 
-			// teleport to reserved arena slot if we have a valid position
-			if(reservedIdx >= 0 && reservedIdx < (int)spawnPos.size())
-				GameServer()->Teleport(pSpawned, spawnPos[reservedIdx]);
+			// teleport into the arena, clamping to a valid slot so a stale reservation
+			// cannot leave the player wherever the regular spawn system put them
+			if(!spawnPos.empty())
+				GameServer()->Teleport(pSpawned, spawnPos[(reservedIdx >= 0 && reservedIdx < (int)spawnPos.size()) ? reservedIdx : 0]);
 		}
 	}
 
@@ -1385,27 +1348,8 @@ void COneOnOneEvent::RestartRoundAfterDraw()
 	m_P1InFreezeTileTick = -1;
 	m_P2InFreezeTileTick = -1;
 
-	std::vector<vec2> startPositions;
-	if(m_Config.m_SpawnMode == 1)
-		startPositions = GameServer()->ZoneManager()->Get1on1ArenaPositions(-1);
-	else
-		startPositions = GameServer()->ZoneManager()->GetNamedQuadCenters("1on1_spawn");
-
-	int spawncount = (int)startPositions.size();
-	if(spawncount >= 2)
-	{
-		int idx1 = secure_rand_below(spawncount);
-		int idx2 = secure_rand_below(spawncount - 1);
-		if(idx2 >= idx1)
-			idx2++;
-		m_SpawnReservation.pos1Idx = idx1;
-		m_SpawnReservation.pos2Idx = idx2;
-	}
-	else if(spawncount == 1)
-	{
-		m_SpawnReservation.pos1Idx = 0;
-		m_SpawnReservation.pos2Idx = 0;
-	}
+	std::vector<vec2> startPositions = GetArenaSpawnPositions();
+	PickSpawnReservation((int)startPositions.size());
 
 	CPlayer *p1 = GameServer()->GetPlayer(m_Player1ID);
 	CPlayer *p2 = GameServer()->GetPlayer(m_Player2ID);
@@ -1416,25 +1360,13 @@ void COneOnOneEvent::RestartRoundAfterDraw()
 	{
 		pController->Teams().SetForceCharacterTeam(m_Player1ID, m_Team);
 		p1->KillCharacter(WEAPON_WORLD, false);
-		int idx1 = m_SpawnReservation.pos1Idx;
-		if(idx1 >= 0 && idx1 < (int)startPositions.size())
-			p1->ForceSpawn(startPositions[idx1], false);
-		else if(!startPositions.empty())
-			p1->ForceSpawn(startPositions[0], false);
-		else
-			p1->ForceSpawn(vec2(0, 0), false);
+		SpawnAtReservedSlot(p1, startPositions, m_SpawnReservation.pos1Idx);
 	}
 	if(p2)
 	{
 		pController->Teams().SetForceCharacterTeam(m_Player2ID, m_Team);
 		p2->KillCharacter(WEAPON_WORLD, false);
-		int idx2 = m_SpawnReservation.pos2Idx;
-		if(idx2 >= 0 && idx2 < (int)startPositions.size())
-			p2->ForceSpawn(startPositions[idx2], false);
-		else if(!startPositions.empty())
-			p2->ForceSpawn(startPositions[0], false);
-		else
-			p2->ForceSpawn(vec2(0, 0), false);
+		SpawnAtReservedSlot(p2, startPositions, m_SpawnReservation.pos2Idx);
 	}
 
 	m_DrawRestartInProgress = false;
@@ -1824,8 +1756,6 @@ void COneOnOneEvent::AbortAndRefund(const char *pReason)
 	{
 		LoadPosition(cid);
 		LoadWeapons(cid);
-		if(auto p = GameServer()->GetPlayer(cid))
-			p->m_allowDeath = true;
 	}
 
 	// restore solo/collision state

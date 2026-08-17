@@ -20,6 +20,8 @@
 #include <blockworlds/components/oneonone_manager.h>
 #include <blockworlds/votes/votemanager.h>
 
+#include <algorithm>
+
 CEvents::CEvents(CGameContext *pGameServer) :
 	CComponent(pGameServer), m_pActiveEvent(nullptr), m_pEventToDelete(nullptr)
 {
@@ -233,8 +235,10 @@ void CEvents::ConJoin(IConsole::IResult *pResult, void *pUserData)
 
 	if(auto oneOnOneMgr = g_ComponentRegistry.Get<COneOnOneManager>(); oneOnOneMgr)
 	{
+		// any match that has not finished still owns this player's position, team and
+		// cosmetics, so let it restore them before the player queues for an event
 		auto match = oneOnOneMgr->GetMatchForPlayer(pResult->m_ClientId);
-		if(match && (match->GetState() == COneOnOneEvent::EEventState::Active || match->GetState() == COneOnOneEvent::EEventState::Preparation))
+		if(match && match->GetState() != COneOnOneEvent::EEventState::Finished)
 		{
 			pThis->GameServer()->SendChatTarget(pResult->m_ClientId, "You are currently in a 1on1, finish it before joining an event.");
 			return;
@@ -330,6 +334,18 @@ std::vector<std::string> CEvents::GetEventsByCategory(EEventCategory Category) c
 		if(kv.second.m_Category == Category)
 			out.push_back(kv.first);
 	return out;
+}
+
+bool CEvents::DropRegistration(int ClientId)
+{
+	if(!m_pActiveEvent || m_pActiveEvent->GetState() != CEventComponent::EEventState::Registration)
+		return false;
+
+	const auto &Candidates = m_pActiveEvent->Candidates();
+	if(std::find(Candidates.begin(), Candidates.end(), ClientId) == Candidates.end())
+		return false;
+
+	return m_pActiveEvent->DeRegister(ClientId);
 }
 
 std::optional<CEvents::EEventCategory> CEvents::GetCategoryOf(const char *pName) const

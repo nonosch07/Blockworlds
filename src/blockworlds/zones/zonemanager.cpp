@@ -125,12 +125,18 @@ void CZoneManager::Init(CGameContext *pGameServer)
 						pNoExpZone->Init(pQuads);
 						m_aZones[ZONE_NOEXP] = static_cast<IZone *>(pNoExpZone);
 					}
-					else if(!m_aZones[ZONE_1ON1_PREP] && str_comp_nocase(aName, "1on1_prep") == 0)
+					else if(str_comp_nocase(aName, "1on1_prep") == 0)
 					{
-						C1on1PrepZone *pPrepZone = new C1on1PrepZone(GameServer());
-						pPrepZone->Init(pQuads);
-						m_aZones[ZONE_1ON1_PREP] = static_cast<IZone *>(pPrepZone);
-						// dbg_msg("zones", "loaded 1on1 prep zone with %d quads", pQuads->m_NumQuads);
+						// only the first prep layer becomes the prep zone, but a further one
+						// must not fall through to the arena branch below either, or players
+						// would spawn in the preparation area during a match
+						if(!m_aZones[ZONE_1ON1_PREP])
+						{
+							C1on1PrepZone *pPrepZone = new C1on1PrepZone(GameServer());
+							pPrepZone->Init(pQuads);
+							m_aZones[ZONE_1ON1_PREP] = static_cast<IZone *>(pPrepZone);
+							// dbg_msg("zones", "loaded 1on1 prep zone with %d quads", pQuads->m_NumQuads);
+						}
 					}
 					else if(str_comp_nocase_num(aName, "1on1_", 5) == 0)
 					{

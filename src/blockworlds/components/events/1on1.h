@@ -68,6 +68,19 @@ public:
 	[[nodiscard]] std::optional<int> GetScoreOf(int ClientId) const;
 	const S1on1SpawnReservation &GetSpawnReservation() const { return m_SpawnReservation; }
 
+	// Arena spawn positions for the configured spawn mode. Falls back to the other
+	// source when the configured one is missing on this map, so that a running match
+	// never leaves players to the regular map spawns.
+	[[nodiscard]] std::vector<vec2> GetArenaSpawnPositions() const;
+
+	// Reserves one distinct slot per player out of PositionCount, or clears the
+	// reservation when there is nothing to reserve.
+	void PickSpawnReservation(int PositionCount);
+
+	// Spawns a participant at its reserved slot, clamping to a valid slot so the
+	// player always ends up inside the arena.
+	void SpawnAtReservedSlot(class CPlayer *pPlayer, const std::vector<vec2> &Positions, int Idx);
+
 private:
 public:
 	// Minimal event-like state copied from CEventComponent so 1on1 can be independent

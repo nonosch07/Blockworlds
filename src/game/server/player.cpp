@@ -1170,11 +1170,7 @@ void CPlayer::TryRespawn()
 				}
 				else if(match->GetState() == COneOnOneEvent::EEventState::Active)
 				{
-					std::vector<vec2> positions;
-					if(match->m_Config.m_SpawnMode == 1)
-						positions = GameServer()->ZoneManager()->Get1on1ArenaPositions(-1);
-					else
-						positions = GameServer()->ZoneManager()->GetNamedQuadCenters("1on1_spawn");
+					std::vector<vec2> positions = match->GetArenaSpawnPositions();
 					if(!positions.empty())
 					{
 						auto &res = match->GetSpawnReservation();

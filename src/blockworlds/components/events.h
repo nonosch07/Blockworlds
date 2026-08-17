@@ -53,6 +53,11 @@ public:
 	std::vector<std::string> GetEventsByCategory(EEventCategory Category) const;
 	std::optional<EEventCategory> GetCategoryOf(const char *pName) const; // just an helper cause i'm retarded
 
+	// Takes a player out of the registration of the pending event, so that they are
+	// not promoted to participant while they are busy elsewhere (1on1).
+	// Returns true when the player was registered and got removed.
+	bool DropRegistration(int ClientId);
+
 private:
 	std::shared_ptr<CEventComponent> m_pActiveEvent;
 	std::shared_ptr<CEventComponent> m_pEventToDelete;

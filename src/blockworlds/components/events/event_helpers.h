@@ -16,11 +16,18 @@
 
 inline void SavePositionHelper(CGameContext *pGameServer, std::map<int, std::unique_ptr<class CSaveTee>> &m_pSavedPlayers, int ClientId)
 {
-	auto pSavedTee = std::make_unique<CSaveTee>();
 	auto *pChar = pGameServer->GetPlayerChar(ClientId);
-	if(pChar)
-		pSavedTee->Save(pChar, false);
+	if(!pChar)
+	{
+		// Spectators and dead players have nothing to save. Storing an unsaved CSaveTee
+		// would make LoadPositionHelper load its uninitialized members into a character
+		// later, and m_HookedPlayer and m_ActiveWeapon are used as array indices without
+		// bounds checks. Any earlier save is kept, it is still the position to restore.
+		return;
+	}
 
+	auto pSavedTee = std::make_unique<CSaveTee>();
+	pSavedTee->Save(pChar, false);
 	m_pSavedPlayers.insert_or_assign(ClientId, std::move(pSavedTee));
 }
 
